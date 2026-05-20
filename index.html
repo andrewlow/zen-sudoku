@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Zen Sudoku</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+</head>
+<body class="light-mode">
+    <div id="app-container">
+        <header id="main-header">
+            <div class="date-info">
+                <h1 id="current-date-display">-- --</h1>
+                <p>Zen Sudoku</p>
+            </div>
+            <div class="top-actions">
+                <button id="btn-stats" class="icon-btn" title="Statistics">📊</button>
+                <button id="btn-settings" class="icon-btn" title="Settings">⚙️</button>
+            </div>
+        </header>
+
+        <!-- The Sudoku Board -->
+        <div id="sudoku-grid"></div>
+
+        <!-- Input Number Pad -->
+        <div class="numpad" id="number-pad"></div>
+
+        <!-- Game Controls -->
+        <div class="toolbar">
+            <button id="btn-undo" class="fat-btn">Undo</button>
+            <button id="btn-notes" class="fat-btn">Notes: Off</button>
+            <button id="btn-erase" class="fat-btn">Erase</button>
+            <button id="btn-share" class="fat-btn">Share</button>
+        </div>
+    </div>
+
+    <!-- Win Overlay: Shown on completion -->
+    <div id="win-overlay" class="overlay hidden">
+        <div class="overlay-content" style="text-align: center;">
+            <div style="font-size: 4rem; margin-bottom: 10px;">✨</div>
+            <h2>Zen Attained</h2>
+            <p style="color: var(--text-light); margin-bottom: 25px;">Daily puzzle complete. Return tomorrow for a new flow.</p>
+            <button onclick="location.reload()" class="fat-btn" style="width: 100%; background: var(--primary); color: white; border: none;">Refresh</button>
+        </div>
+    </div>
+
+    <!-- Settings Overlay -->
+    <div id="settings-overlay" class="overlay hidden">
+        <div class="overlay-content">
+            <button class="close-overlay" aria-label="Close Settings">&times;</button>
+            <h2 style="margin-bottom: 20px;">Settings</h2>
+            
+            <div class="settings-list">
+                <div class="setting-item">
+                    <span>Dark Mode</span>
+                    <input type="checkbox" id="toggle-dark">
+                </div>
+                <div class="setting-item">
+                    <span>Highlight Related</span>
+                    <input type="checkbox" id="toggle-related" checked>
+                </div>
+                <div class="setting-item">
+                    <span>Highlight Mistakes</span>
+                    <input type="checkbox" id="toggle-mistakes" checked>
+                </div>
+                <div class="setting-item">
+                    <span>Highlight Identical</span>
+                    <input type="checkbox" id="toggle-identical" checked>
+                </div>
+                <div class="setting-item">
+                    <span>Auto-Clear Notes</span>
+                    <input type="checkbox" id="toggle-autoclear" checked>
+                </div>
+                
+                <hr style="margin: 15px 0; border: 0; border-top: 1px solid var(--border);">
+                
+                <div class="setting-group">
+                    <label style="font-weight: 600; font-size: 0.9rem; display: block; margin-bottom: 8px;">
+                        Difficulty (Resets Board)
+                    </label>
+                    <select id="select-difficulty" style="width:100%; padding:12px; border-radius:10px; border: 1px solid var(--border); font-family: inherit; background: var(--surface); color: var(--text); cursor: pointer;">
+                        <option value="easy">Easy</option>
+                        <option value="medium">Medium</option>
+                        <option value="hard">Hard</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Overlay -->
+    <div id="stats-overlay" class="overlay hidden">
+        <div class="overlay-content">
+            <button class="close-overlay" aria-label="Close Stats">&times;</button>
+            <h2>Focus Stats</h2>
+            <div id="stats-body" style="margin-top: 20px;">
+                <p id="stat-streak" style="color: var(--text-light);">Your daily progress is saved per difficulty level.</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

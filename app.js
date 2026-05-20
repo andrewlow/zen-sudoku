@@ -25,6 +25,13 @@ const STATE = {
     notesMode: false
 };
 
+let STATS = {
+    streak: 0,
+    totalSolved: { easy: 0, medium: 0, hard: 0 },
+    lastSolvedDate: null, // Format: YYYYMMDD
+    history: [] // Optional: track dates of completion
+};
+
 // --- UTILITIES ---
 
 /**
@@ -51,7 +58,8 @@ function saveGame() {
         dateSeed: STATE.dateSeed,
         board: STATE.board,
         notes: STATE.notes,
-        settings: SETTINGS
+        settings: SETTINGS,
+        stats: STATS
     };
     localStorage.setItem('zenSudoku_save', JSON.stringify(data));
 }
@@ -61,9 +69,8 @@ function loadGame() {
     if (!saved) return;
     const data = JSON.parse(saved);
     
-    if (data.settings) {
-        Object.assign(SETTINGS, data.settings);
-    }
+    if (data.settings) Object.assign(SETTINGS, data.settings);
+    if (data.stats) STATS = data.stats;
     
     // Load board only if day matches
     if (data.dateSeed === STATE.dateSeed && data.board && data.board.length === 81) {
@@ -174,6 +181,59 @@ function updateNumpad() {
     });
 }
 
+// Logic to update stats upon winning
+function recordWin() {
+    const today = STATE.dateSeed;
+    
+    // Increment total for current difficulty
+    STATS.totalSolved[SETTINGS.difficulty]++;
+    
+    // Handle Streak
+    if (STATS.lastSolvedDate) {
+        const yesterday = getYesterdaySeed(today);
+        if (STATS.lastSolvedDate === yesterday) {
+            STATS.streak++;
+        } else if (STATS.lastSolvedDate !== today) {
+            STATS.streak = 1;
+        }
+    } else {
+        STATS.streak = 1;
+    }
+    
+    STATS.lastSolvedDate = today;
+    saveGame();
+    updateStatsUI();
+}
+
+function getYesterdaySeed(todaySeed) {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+}
+
+function updateStatsUI() {
+    const statsBody = document.getElementById('stats-body');
+    if (!statsBody) return;
+    
+    statsBody.innerHTML = `
+        <div class="stats-grid">
+            <div class="stat-card">
+                <span class="stat-val">${STATS.streak}</span>
+                <span class="stat-label">Day Streak</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-val">${STATS.totalSolved.easy + STATS.totalSolved.medium + STATS.totalSolved.hard}</span>
+                <span class="stat-label">Total Zen</span>
+            </div>
+        </div>
+        <div class="stats-breakdown">
+            <div class="diff-stat"><span>Easy:</span> <strong>${STATS.totalSolved.easy}</strong></div>
+            <div class="diff-stat"><span>Medium:</span> <strong>${STATS.totalSolved.medium}</strong></div>
+            <div class="diff-stat"><span>Hard:</span> <strong>${STATS.totalSolved.hard}</strong></div>
+        </div>
+    `;
+}
+
 function handleInput(num) {
     if (STATE.initial[STATE.selected] !== 0) return;
 
@@ -202,6 +262,7 @@ function handleInput(num) {
     
     // Win Condition
     if (STATE.board.every((v, i) => (STATE.initial[i] || v) === STATE.solution[i])) {
+        recordWin(); // Call this new function
         setTimeout(() => document.getElementById('win-overlay').classList.remove('hidden'), 300);
     }
 }

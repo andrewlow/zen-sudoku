@@ -214,22 +214,29 @@ function getYesterdaySeed(todaySeed) {
 function updateStatsUI() {
     const statsBody = document.getElementById('stats-body');
     if (!statsBody) return;
-    
+
+    // Safety check: if STATS wasn't loaded correctly, use defaults
+    const streak = STATS.streak || 0;
+    const easy = STATS.totalSolved?.easy || 0;
+    const medium = STATS.totalSolved?.medium || 0;
+    const hard = STATS.totalSolved?.hard || 0;
+    const total = easy + medium + hard;
+
     statsBody.innerHTML = `
         <div class="stats-grid">
             <div class="stat-card">
-                <span class="stat-val">${STATS.streak}</span>
+                <span class="stat-val">${streak}</span>
                 <span class="stat-label">Day Streak</span>
             </div>
             <div class="stat-card">
-                <span class="stat-val">${STATS.totalSolved.easy + STATS.totalSolved.medium + STATS.totalSolved.hard}</span>
+                <span class="stat-val">${total}</span>
                 <span class="stat-label">Total Zen</span>
             </div>
         </div>
         <div class="stats-breakdown">
-            <div class="diff-stat"><span>Easy:</span> <strong>${STATS.totalSolved.easy}</strong></div>
-            <div class="diff-stat"><span>Medium:</span> <strong>${STATS.totalSolved.medium}</strong></div>
-            <div class="diff-stat"><span>Hard:</span> <strong>${STATS.totalSolved.hard}</strong></div>
+            <div class="diff-stat"><span>Easy</span> <strong>${easy}</strong></div>
+            <div class="diff-stat"><span>Medium</span> <strong>${medium}</strong></div>
+            <div class="diff-stat"><span>Hard</span> <strong>${hard}</strong></div>
         </div>
     `;
 }
@@ -334,7 +341,22 @@ window.onload = () => {
     
     document.getElementById('btn-erase').onclick = () => handleInput(0);
     document.getElementById('btn-settings').onclick = () => document.getElementById('settings-overlay').classList.remove('hidden');
-    document.getElementById('btn-stats').onclick = () => document.getElementById('stats-overlay').classList.remove('hidden');
+    document.getElementById('btn-stats').onclick = () => {
+        updateStatsUI(); // 1. Generate the content first
+        document.getElementById('stats-overlay').classList.remove('hidden'); // 2. Then show it
+    };
+    document.getElementById('btn-share').onclick = () => {
+        const total = STATS.totalSolved.easy + STATS.totalSolved.medium + STATS.totalSolved.hard;
+        const text = `🧘 Zen Sudoku\nStreak: ${STATS.streak} days\nTotal Puzzles: ${total}\nLevel: ${SETTINGS.difficulty.toUpperCase()}`;
+    
+        if (navigator.share) {
+            navigator.share({ title: 'Zen Sudoku', text: text });
+        } else {
+            navigator.clipboard.writeText(text);
+            alert('Stats copied to clipboard!');
+        }
+    };
+
     document.querySelectorAll('.close-overlay').forEach(b => b.onclick = () => b.closest('.overlay').classList.add('hidden'));
 
     renderGrid();

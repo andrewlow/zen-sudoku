@@ -1,4 +1,9 @@
 // --- CONFIGURATION & SETTINGS ---
+
+const GENESIS_DATE = new Date(2026, 0, 1); // Jan 1, 2026
+const TODAY = new Date();
+TODAY.setHours(0, 0, 0, 0); // Normalize today for comparison
+
 const SETTINGS = {
     darkMode: false,
     highlightRelated: true,
@@ -24,6 +29,8 @@ const STATE = {
     selected: 0,
     notesMode: false
 };
+
+STATE.viewingDate = new Date(); // The date currently being viewed/played
 
 let STATS = {
     streak: 0,
@@ -52,16 +59,28 @@ function areRelated(i, j) {
 }
 
 // --- DATA PERSISTENCE ---
-
 function saveGame() {
-    const data = {
-        dateSeed: STATE.dateSeed,
-        board: STATE.board,
-        notes: STATE.notes,
-        settings: SETTINGS,
-        stats: STATS
-    };
-    localStorage.setItem('zenSudoku_save', JSON.stringify(data));
+    try {
+        // Create a 'Clean' object containing ONLY primitives
+        const snapshot = {
+            dateSeed: Number(STATE.dateSeed),
+            board: [...STATE.board], // Spread creates a shallow copy of the array
+            notes: JSON.parse(JSON.stringify(STATE.notes || {})), // Deep copy of the notes object
+            settings: { ...SETTINGS },
+            stats: {
+                streak: Number(STATS.streak) || 0,
+                totalSolved: { ...STATS.totalSolved },
+                lastSolvedDate: STATS.lastSolvedDate,
+                history: JSON.parse(JSON.stringify(STATS.history || {}))
+            }
+        };
+
+        const stringified = JSON.stringify(snapshot);
+        localStorage.setItem('zenSudoku_save', stringified);
+    } catch (e) {
+        console.error("Save failed. Checking for circular references...", e);
+        // If this still fails, one of your variables is not what you think it is.
+    }
 }
 
 function loadGame() {
@@ -69,37 +88,49 @@ function loadGame() {
     if (!saved) return;
     const data = JSON.parse(saved);
     
+    // Always load global settings and stats
     if (data.settings) Object.assign(SETTINGS, data.settings);
     if (data.stats) STATS = data.stats;
     
-    // Load board only if day matches
+    // ONLY load the board and notes if the saved date matches the current STATE.dateSeed
     if (data.dateSeed === STATE.dateSeed && data.board && data.board.length === 81) {
         STATE.board = data.board;
         STATE.notes = data.notes || {};
+    } else {
+        // If the date is different, reset the active board state
+        STATE.board = [];
+        STATE.notes = {};
     }
 }
 
 // --- ENGINE ---
 
-function initDailyBoard() {
-    const now = new Date();
-    // Unique seed for the day: YYYYMMDD
-    STATE.dateSeed = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate();
-    STATE.dateStr = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+function initDailyBoard(targetDate = new Date()) {
+    // 1. Safety Bounds
+    if (targetDate < GENESIS_DATE) targetDate = new Date(GENESIS_DATE);
+    if (targetDate > TODAY) targetDate = new Date(TODAY);
+
+    // 2. Set the current session identity
+    STATE.viewingDate = new Date(targetDate);
+    STATE.dateSeed = targetDate.getFullYear() * 10000 + (targetDate.getMonth() + 1) * 100 + targetDate.getDate();
     
+    // 3. THE CRITICAL WIPE
+    // We clear these here so that if loadGame() doesn't find a match, 
+    // no old data remains.
+    STATE.board = [];
+    STATE.notes = {};
+    STATE.selected = 0;
+
+    // 4. Update UI Header
+    STATE.dateStr = targetDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    document.getElementById('current-date-display').textContent = STATE.dateStr;
+
+    // 5. Load progress (This will only fill STATE.board if the dateSeed matches)
     loadGame(); 
-    applySettingsToUI();
 
+    // 6. Generate the Solution for the NEW date
     const rng = seededRandom(STATE.dateSeed);
-    
-    // Generate a valid base solution using a pattern shift
-    const base = [
-        1,2,3,4,5,6,7,8,9, 4,5,6,7,8,9,1,2,3, 7,8,9,1,2,3,4,5,6,
-        2,3,1,5,6,4,8,9,7, 5,6,4,8,9,7,2,3,1, 8,9,7,2,3,1,5,6,4,
-        3,1,2,6,4,5,9,7,8, 6,4,5,9,7,8,3,1,2, 9,7,8,3,1,2,6,4,5
-    ];
-
-    // Shuffle digits deterministically based on the daily seed
+    const base = [1,2,3,4,5,6,7,8,9, 4,5,6,7,8,9,1,2,3, 7,8,9,1,2,3,4,5,6, 2,3,1,5,6,4,8,9,7, 5,6,4,8,9,7,2,3,1, 8,9,7,2,3,1,5,6,4, 3,1,2,6,4,5,9,7,8, 6,4,5,9,7,8,3,1,2, 9,7,8,3,1,2,6,4,5];
     let digits = [1,2,3,4,5,6,7,8,9];
     for (let i = 8; i > 0; i--) {
         const j = Math.floor(rng() * (i + 1));
@@ -107,14 +138,16 @@ function initDailyBoard() {
     }
     STATE.solution = base.map(n => digits[n-1]);
     
-    // Apply Difficulty Mask
+    // 7. Generate Initial Clues
     const threshold = diffMap[SETTINGS.difficulty] || 0.5;
     STATE.initial = STATE.solution.map(v => rng() < threshold ? v : 0);
     
-    // If no progress saved, start with the mask
-    if (!STATE.board || STATE.board.length === 0) {
+    // 8. If loadGame() didn't find anything for this date, start fresh with initial clues
+    if (STATE.board.length === 0) {
         STATE.board = [...STATE.initial];
     }
+    
+    renderGrid();
 }
 
 function applySettingsToUI() {
@@ -182,27 +215,134 @@ function updateNumpad() {
 }
 
 // Logic to update stats upon winning
+
 function recordWin() {
-    const today = STATE.dateSeed;
+    const puzzleDate = STATE.dateSeed;
+    if (!STATS.history) STATS.history = {};
+
+    const diffWeights = { 'easy': 1, 'medium': 2, 'hard': 3 };
     
-    // Increment total for current difficulty
-    STATS.totalSolved[SETTINGS.difficulty]++;
+    // CHANGE 1: Force currentDiff to be a string primitive
+    const currentDiff = String(SETTINGS.difficulty); 
+    const previousEntry = STATS.history[puzzleDate];
     
-    // Handle Streak
-    if (STATS.lastSolvedDate) {
-        const yesterday = getYesterdaySeed(today);
-        if (STATS.lastSolvedDate === yesterday) {
-            STATS.streak++;
-        } else if (STATS.lastSolvedDate !== today) {
-            STATS.streak = 1;
-        }
-    } else {
-        STATS.streak = 1;
+    // CHANGE 2: Robust weight check (handles if previousEntry was accidentally an object)
+    const previousWeight = (typeof previousEntry === 'string') ? (diffWeights[previousEntry] || 0) : 0;
+    const currentWeight = diffWeights[currentDiff] || 0;
+
+    if (!previousEntry || currentWeight > previousWeight) {
+        STATS.history[puzzleDate] = currentDiff;
     }
     
-    STATS.lastSolvedDate = today;
+    // (Step 2: Totals)
+    if (!STATS.solvedCombos) STATS.solvedCombos = [];
+    const comboKey = `${puzzleDate}_${currentDiff}`;
+    
+    if (!STATS.solvedCombos.includes(comboKey)) {
+        STATS.totalSolved[currentDiff]++;
+        STATS.solvedCombos.push(comboKey);
+    }
+    
+    // (Step 3: Streak Logic - Kept exactly as you had it)
+    const realToday = new Date();
+    const realTodaySeed = realToday.getFullYear() * 10000 + (realToday.getMonth() + 1) * 100 + realToday.getDate();
+
+    if (puzzleDate === realTodaySeed) {
+        if (STATS.lastSolvedDate) {
+            const yesterday = getYesterdaySeed(realTodaySeed);
+            if (STATS.lastSolvedDate === yesterday) {
+                STATS.streak++;
+            } else if (STATS.lastSolvedDate !== realTodaySeed) {
+                STATS.streak = 1;
+            }
+        } else {
+            STATS.streak = 1;
+        }
+        STATS.lastSolvedDate = realTodaySeed;
+    }
+    
     saveGame();
     updateStatsUI();
+}
+
+function renderCalendar() {
+    const container = document.getElementById('calendar-grid');
+    const monthLabel = document.getElementById('calendar-month-year');
+    if (!container || !monthLabel) return;
+
+    container.innerHTML = '';
+    const year = STATE.viewingDate.getFullYear();
+    const month = STATE.viewingDate.getMonth();
+    
+    monthLabel.textContent = STATE.viewingDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+    // Boundary Logic for Buttons (Preserved)
+    const prevBtn = document.getElementById('cal-prev');
+    const nextBtn = document.getElementById('cal-next');
+    
+    if (year === 2026 && month === 0) prevBtn.style.visibility = 'hidden';
+    else prevBtn.style.visibility = 'visible';
+
+    if (year === TODAY.getFullYear() && month === TODAY.getMonth()) nextBtn.style.visibility = 'hidden';
+    else nextBtn.style.visibility = 'visible';
+
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    // Spacers for the start of the month
+    for (let i = 0; i < firstDay; i++) {
+        container.appendChild(document.createElement('div'));
+    }
+
+    // Actual Today (Real world) for visual underlining
+    const realToday = new Date();
+    const realTodaySeed = realToday.getFullYear() * 10000 + (realToday.getMonth() + 1) * 100 + realToday.getDate();
+
+    for (let day = 1; day <= daysInMonth; day++) {
+        const dateObj = new Date(year, month, day);
+        const dateSeed = year * 10000 + (month + 1) * 100 + day;
+        
+        const dayEl = document.createElement('div');
+        dayEl.className = 'calendar-day';
+        dayEl.textContent = day;
+
+        // 1. Boundary Checks (Genesis and Future)
+        const isFuture = dateObj > TODAY;
+        const isBeforeGenesis = dateObj < GENESIS_DATE;
+
+        if (isFuture || isBeforeGenesis) {
+            dayEl.classList.add('disabled');
+            dayEl.style.opacity = "0.15";
+            dayEl.style.cursor = "default";
+        } else {
+            // 2. Visual State: Completion (Reflecting history of older days)
+            if (STATS.history && STATS.history[dateSeed]) {
+                dayEl.classList.add('completed');
+                // Optional: add difficulty class to color code rings (diff-easy, diff-hard)
+                dayEl.classList.add(`diff-${STATS.history[dateSeed]}`);
+            }
+
+            // 3. Visual State: Active Day (What board is currently loaded)
+            if (dateSeed === STATE.dateSeed) {
+                dayEl.classList.add('active');
+            }
+
+            // 4. Visual State: Real-world Today
+            if (dateSeed === realTodaySeed) {
+                dayEl.classList.add('is-today');
+            }
+            if (STATS.history && STATS.history[dateSeed]) dayEl.classList.add('completed');
+            if (dateSeed === STATE.dateSeed) dayEl.classList.add('active');
+
+            // 5. Interaction: Time Travel
+            dayEl.onclick = () => {
+                initDailyBoard(dateObj);
+                document.getElementById('stats-overlay').classList.add('hidden');
+            };
+        }
+        
+        container.appendChild(dayEl);
+    }
 }
 
 function getYesterdaySeed(todaySeed) {
@@ -342,7 +482,8 @@ window.onload = () => {
     document.getElementById('btn-erase').onclick = () => handleInput(0);
     document.getElementById('btn-settings').onclick = () => document.getElementById('settings-overlay').classList.remove('hidden');
     document.getElementById('btn-stats').onclick = () => {
-        updateStatsUI(); // 1. Generate the content first
+        updateStatsUI(); // 1. Generate the stats content first
+        renderCalendar(); // 2. Render calendar inside stats
         document.getElementById('stats-overlay').classList.remove('hidden'); // 2. Then show it
     };
     document.getElementById('btn-share').onclick = () => {
@@ -355,6 +496,17 @@ window.onload = () => {
             navigator.clipboard.writeText(text);
             alert('Stats copied to clipboard!');
         }
+    };
+    // Next/Prev Month Listeners
+    document.getElementById('cal-prev').onclick = (e) => {
+        e.stopPropagation();
+        STATE.viewingDate.setMonth(STATE.viewingDate.getMonth() - 1);
+        renderCalendar();
+    };
+    document.getElementById('cal-next').onclick = (e) => {
+        e.stopPropagation();
+        STATE.viewingDate.setMonth(STATE.viewingDate.getMonth() + 1);
+        renderCalendar();
     };
 
     document.querySelectorAll('.close-overlay').forEach(b => b.onclick = () => b.closest('.overlay').classList.add('hidden'));

@@ -89,13 +89,31 @@
         </div>
     </div>
 
-    <!-- Stats Overlay -->
+    <!-- Stats & Journal Overlay -->
     <div id="stats-overlay" class="overlay hidden">
         <div class="overlay-content">
             <button class="close-overlay">&times;</button>
-            <h2 style="margin-bottom: 20px;">Statistics</h2>
-            <div id="stats-body">
-                <!-- Content injected by JS -->
+        
+            <h2 style="margin-bottom: 15px;">Zen Journal</h2>
+        
+            <!-- Top Stats Cards -->
+            <div id="stats-body"></div>
+
+            <hr style="margin: 20px 0; border: 0; border-top: 1px solid var(--border);">
+
+            <!-- Calendar Section -->
+            <div class="calendar-section">
+                <div class="calendar-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <button id="cal-prev" class="icon-btn" style="font-size: 1.2rem;">‹</button>
+                    <h3 id="calendar-month-year" style="font-size: 1.1rem; margin: 0;"></h3>
+                    <button id="cal-next" class="icon-btn" style="font-size: 1.2rem;">›</button>
+                </div>
+            
+                <div class="calendar-weekdays" style="display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 0.7rem; font-weight: 800; opacity: 0.5; margin-bottom: 5px;">
+                    <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
+                </div>
+            
+                <div id="calendar-grid"></div>
             </div>
         </div>
     </div>

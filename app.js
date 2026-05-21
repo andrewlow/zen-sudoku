@@ -36,7 +36,8 @@ let STATS = {
     streak: 0,
     totalSolved: { easy: 0, medium: 0, hard: 0 },
     lastSolvedDate: null, // Format: YYYYMMDD
-    history: [] // Optional: track dates of completion
+    history: {}, // Optional: track dates of completion
+    solvedCombos: [] // Explicitly define this here
 };
 
 // --- UTILITIES ---
@@ -61,25 +62,31 @@ function areRelated(i, j) {
 // --- DATA PERSISTENCE ---
 function saveGame() {
     try {
-        // Create a 'Clean' object containing ONLY primitives
         const snapshot = {
             dateSeed: Number(STATE.dateSeed),
-            board: [...STATE.board], // Spread creates a shallow copy of the array
-            notes: JSON.parse(JSON.stringify(STATE.notes || {})), // Deep copy of the notes object
+            board: [...STATE.board],
+            notes: JSON.parse(JSON.stringify(STATE.notes || {})),
             settings: { ...SETTINGS },
             stats: {
                 streak: Number(STATS.streak) || 0,
                 totalSolved: { ...STATS.totalSolved },
                 lastSolvedDate: STATS.lastSolvedDate,
-                history: JSON.parse(JSON.stringify(STATS.history || {}))
+                history: { ...STATS.history }, // Force spread into object
+                solvedCombos: [...(STATS.solvedCombos || [])]
             }
         };
 
         const stringified = JSON.stringify(snapshot);
+        
+        // SIZE GUARD: 5MB is the limit, let's alert if we pass 100KB
+        if (stringified.length > 100000) {
+            console.error("SAVE BLOCKED: Data is suspiciously large (" + (stringified.length/1024).toFixed(2) + " KB)");
+            return;
+        }
+
         localStorage.setItem('zenSudoku_save', stringified);
     } catch (e) {
-        console.error("Save failed. Checking for circular references...", e);
-        // If this still fails, one of your variables is not what you think it is.
+        console.error("Save failed:", e);
     }
 }
 
@@ -129,24 +136,75 @@ function initDailyBoard(targetDate = new Date()) {
     loadGame(); 
 
     // 6. Generate the Solution for the NEW date
-    const rng = seededRandom(STATE.dateSeed);
-    const base = [1,2,3,4,5,6,7,8,9, 4,5,6,7,8,9,1,2,3, 7,8,9,1,2,3,4,5,6, 2,3,1,5,6,4,8,9,7, 5,6,4,8,9,7,2,3,1, 8,9,7,2,3,1,5,6,4, 3,1,2,6,4,5,9,7,8, 6,4,5,9,7,8,3,1,2, 9,7,8,3,1,2,6,4,5];
+const rng = seededRandom(STATE.dateSeed);
+    
+    // 6. Generate a Unique Solution Grid
+    const base = [1,2,3,4,5,6,7,8,9,
+                  4,5,6,7,8,9,1,2,3,
+                  7,8,9,1,2,3,4,5,6,
+                  2,3,1,5,6,4,8,9,7,
+                  5,6,4,8,9,7,2,3,1,
+                  8,9,7,2,3,1,5,6,4,
+                  3,1,2,6,4,5,9,7,8,
+                  6,4,5,9,7,8,3,1,2,
+                  9,7,8,3,1,2,6,4,5];
+    
+    // Shuffle rows within blocks to randomize structure
+    const rowOrder = [0,1,2,3,4,5,6,7,8];
+    [0,3,6].forEach(start => {
+        for (let i = 2; i > 0; i--) {
+            const j = Math.floor(rng() * (i + 1));
+            [rowOrder[start+i], rowOrder[start+j]] = [rowOrder[start+j], rowOrder[start+i]];
+        }
+    });
+
     let digits = [1,2,3,4,5,6,7,8,9];
     for (let i = 8; i > 0; i--) {
         const j = Math.floor(rng() * (i + 1));
         [digits[i], digits[j]] = [digits[j], digits[i]];
     }
-    STATE.solution = base.map(n => digits[n-1]);
-    
-    // 7. Generate Initial Clues
-    const threshold = diffMap[SETTINGS.difficulty] || 0.5;
-    STATE.initial = STATE.solution.map(v => rng() < threshold ? v : 0);
-    
-    // 8. If loadGame() didn't find anything for this date, start fresh with initial clues
-    if (STATE.board.length === 0) {
-        STATE.board = [...STATE.initial];
+
+    STATE.solution = [];
+    for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+            STATE.solution.push(digits[base[rowOrder[r] * 9 + c] - 1]);
+        }
     }
+
+    // 7. Initial Clue Deletion (Symmetric)
+    const difficultyLevels = { 'easy': 38, 'medium': 30, 'hard': 25 };
+    const cluesTarget = difficultyLevels[SETTINGS.difficulty] || 32;
     
+    STATE.initial = [...STATE.solution];
+    let indices = Array.from({length: 81}, (_, i) => i);
+    // Shuffle indices for random removal
+    for (let i = 80; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [indices[i], indices[j]] = [indices[j], indices[i]];
+    }
+
+    let removed = 0;
+    for (let idx of indices) {
+        if (81 - removed <= cluesTarget) break;
+        let opp = 80 - idx;
+        if (STATE.initial[idx] !== 0) {
+            let backupIdx = STATE.initial[idx];
+            let backupOpp = STATE.initial[opp];
+            
+            STATE.initial[idx] = 0;
+            STATE.initial[opp] = 0;
+            
+            // 8. UNQUENESS CHECK: If removing these creates > 1 solution, put them back
+            if (countSolutions(STATE.initial) > 1) {
+                STATE.initial[idx] = backupIdx;
+                STATE.initial[opp] = backupOpp;
+            } else {
+                removed += (idx === opp) ? 1 : 2;
+            }
+        }
+    }
+
+    if (STATE.board.length === 0) STATE.board = [...STATE.initial];
     renderGrid();
 }
 
@@ -345,10 +403,16 @@ function renderCalendar() {
     }
 }
 
-function getYesterdaySeed(todaySeed) {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+function getYesterdaySeed(currentSeed) {
+    // currentSeed is YYYYMMDD
+    const y = Math.floor(currentSeed / 10000);
+    const m = Math.floor((currentSeed % 10000) / 100) - 1;
+    const d = currentSeed % 100;
+    
+    const date = new Date(y, m, d);
+    date.setDate(date.getDate() - 1);
+    
+    return date.getFullYear() * 10000 + (date.getMonth() + 1) * 100 + date.getDate();
 }
 
 function updateStatsUI() {
@@ -413,6 +477,47 @@ function handleInput(num) {
         setTimeout(() => document.getElementById('win-overlay').classList.remove('hidden'), 300);
     }
 }
+
+/**
+ * Recursively counts solutions for a given board state.
+ * @param {Array} board - The 81-item board array.
+ * @param {number} limit - The number of solutions at which to stop searching.
+ * @returns {number} - Number of solutions found (capped at limit).
+ */
+function countSolutions(board, limit = 2) {
+    let count = 0;
+    const b = [...board];
+
+    function solve() {
+        if (count >= limit) return;
+        const empty = b.indexOf(0);
+        if (empty === -1) { count++; return; }
+
+        const r = Math.floor(empty / 9), c = empty % 9;
+        const boxR = Math.floor(r / 3) * 3, boxC = Math.floor(c / 3) * 3;
+
+        // Bitmask or simple array check for valid numbers
+        const used = new Set();
+        for (let i = 0; i < 9; i++) {
+            used.add(b[r * 9 + i]);
+            used.add(b[i * 9 + c]);
+            used.add(b[(boxR + Math.floor(i / 3)) * 9 + (boxC + i % 3)]);
+        }
+
+        for (let num = 1; num <= 9; num++) {
+            if (!used.has(num)) {
+                b[empty] = num;
+                solve();
+                b[empty] = 0;
+                if (count >= limit) return;
+            }
+        }
+    }
+
+    solve();
+    return count;
+}
+
 
 // --- INITIALIZATION ---
 

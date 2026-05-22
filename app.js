@@ -215,7 +215,10 @@ function applySettingsToUI() {
     document.getElementById('toggle-mistakes').checked = SETTINGS.highlightMistakes;
     document.getElementById('toggle-identical').checked = SETTINGS.highlightIdentical;
     document.getElementById('toggle-autoclear').checked = SETTINGS.autoClearNotes;
-    document.getElementById('select-difficulty').value = SETTINGS.difficulty;
+    const diffSelect = document.getElementById('select-difficulty');
+    if (diffSelect) {
+        diffSelect.value = SETTINGS.difficulty;
+    }
 }
 
 function renderGrid() {
@@ -542,12 +545,25 @@ function initSettingsListeners() {
     });
 
     document.getElementById('select-difficulty').onchange = (e) => {
-        SETTINGS.difficulty = e.target.value;
-        STATE.board = []; // Clear progress
+        const newDiff = e.target.value; // 'easy', 'medium', or 'hard'
+    
+        // 1. Update the global setting
+        SETTINGS.difficulty = newDiff;
+    
+        // 2. Wipe the current active board so a new one generates at this difficulty
+        STATE.board = []; 
         STATE.notes = {};
+    
+        // 3. Save the new difficulty and state
         saveGame();
-        location.reload(); 
+    
+        // 4. Re-initialize the board for the current date (no reload needed!)
+        initDailyBoard(STATE.viewingDate);
+    
+        // 5. (Optional) Close the overlay so the user sees the new board
+        document.getElementById('settings-overlay').classList.add('hidden');
     };
+
 }
 
 document.addEventListener('keydown', (e) => {
@@ -585,7 +601,12 @@ window.onload = () => {
     };
     
     document.getElementById('btn-erase').onclick = () => handleInput(0);
-    document.getElementById('btn-settings').onclick = () => document.getElementById('settings-overlay').classList.remove('hidden');
+    document.getElementById('btn-settings').onclick = () => {
+        // SYNC: Update the dropdown to match the current setting before showing the UI
+        document.getElementById('select-difficulty').value = SETTINGS.difficulty;
+    
+        document.getElementById('settings-overlay').classList.remove('hidden');
+    };
     document.getElementById('btn-stats').onclick = () => {
         updateStatsUI(); // 1. Generate the stats content first
         renderCalendar(); // 2. Render calendar inside stats

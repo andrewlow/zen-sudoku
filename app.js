@@ -32,12 +32,15 @@ const STATE = {
 
 STATE.viewingDate = new Date(); // The date currently being viewed/played
 
+const STORAGE_VERSION = "2.0";
+
 let STATS = {
+    version: STORAGE_VERSION,
     streak: 0,
+    lastSolvedDate: null,
     totalSolved: { easy: 0, medium: 0, hard: 0 },
-    lastSolvedDate: null, // Format: YYYYMMDD
-    history: {}, // Optional: track dates of completion
-    solvedCombos: [] // Explicitly define this here
+    solvedCombos: [], // Keep this to track unique completions
+    history: {} 
 };
 
 // --- UTILITIES ---
@@ -62,49 +65,97 @@ function areRelated(i, j) {
 // --- DATA PERSISTENCE ---
 function saveGame() {
     try {
+        const dateKey = STATE.dateSeed;
+        const diff = SETTINGS.difficulty;
+
+        // 1. Update the in-memory STATS history for the current date/difficulty
+        if (!STATS.history[dateKey]) STATS.history[dateKey] = {};
+
+        // Calculate if current board is complete to determine "Lean" vs "Full" save
+        const isActuallyComplete = STATE.board.every((v, i) => 
+            (STATE.initial[i] || v) === STATE.solution[i] && (STATE.initial[i] || v) !== 0
+        );
+
+        if (isActuallyComplete) {
+            // LEAN: Just mark completion. Solver can derive numbers from seed on reload.
+            STATS.history[dateKey][diff] = { completed: true };
+        } else {
+            // FULL: Save progress for an ongoing game
+            STATS.history[dateKey][diff] = {
+                board: [...STATE.board],
+                notes: JSON.parse(JSON.stringify(STATE.notes || {})),
+                completed: false
+            };
+        }
+
+        // 2. Build the Snapshot with Versioning
         const snapshot = {
-            dateSeed: Number(STATE.dateSeed),
-            board: [...STATE.board],
-            notes: JSON.parse(JSON.stringify(STATE.notes || {})),
+            version: STORAGE_VERSION, // "2.0"
+            dateSeed: Number(STATE.dateSeed), // Current active date
             settings: { ...SETTINGS },
             stats: {
+                version: STORAGE_VERSION,
                 streak: Number(STATS.streak) || 0,
                 totalSolved: { ...STATS.totalSolved },
                 lastSolvedDate: STATS.lastSolvedDate,
-                history: { ...STATS.history }, // Force spread into object
-                solvedCombos: [...(STATS.solvedCombos || [])]
+                solvedCombos: [...(STATS.solvedCombos || [])],
+                history: { ...STATS.history }
             }
         };
 
         const stringified = JSON.stringify(snapshot);
         
-        // SIZE GUARD: 5MB is the limit, let's alert if we pass 100KB
+        // 3. SIZE GUARD: 5MB is the browser limit
         if (stringified.length > 100000) {
             console.error("SAVE BLOCKED: Data is suspiciously large (" + (stringified.length/1024).toFixed(2) + " KB)");
+            // We return here to prevent writing corrupted/looped data to disk
             return;
         }
 
         localStorage.setItem('zenSudoku_save', stringified);
+        
     } catch (e) {
-        console.error("Save failed:", e);
+        console.error("Save failed. Checking for circular references or quota issues:", e);
     }
 }
 
 function loadGame() {
     const saved = localStorage.getItem('zenSudoku_save');
     if (!saved) return;
+    
     const data = JSON.parse(saved);
-    
-    // Always load global settings and stats
+
+    // 1. VERSION GUARD: If storage is old (v1.0), wipe it and start fresh with v2.0
+    if (data.version !== STORAGE_VERSION) {
+        console.warn("Storage version mismatch. Upgrading to " + STORAGE_VERSION);
+        localStorage.removeItem('zenSudoku_save');
+        return; 
+    }
+
+    // 2. RESTORE GLOBALS: Always load settings and stats
     if (data.settings) Object.assign(SETTINGS, data.settings);
-    if (data.stats) STATS = data.stats;
-    
-    // ONLY load the board and notes if the saved date matches the current STATE.dateSeed
-    if (data.dateSeed === STATE.dateSeed && data.board && data.board.length === 81) {
-        STATE.board = data.board;
-        STATE.notes = data.notes || {};
+    if (data.stats) {
+        STATS = data.stats;
+    }
+
+    // 3. LOAD ACTIVE BOARD: Pull from the specific Date + Difficulty slot
+    const dateKey = STATE.dateSeed;
+    const diff = SETTINGS.difficulty;
+    const savedSlot = STATS.history[dateKey]?.[diff];
+
+    if (savedSlot) {
+        if (savedSlot.completed) {
+            // RECOVERY: The game was finished. 
+            // Instead of storing 81 numbers, we just copy the solution.
+            STATE.board = [...STATE.solution];
+            STATE.notes = {};
+        } else if (savedSlot.board && savedSlot.board.length === 81) {
+            // PROGRESS: The game is mid-way. Load the saved numbers.
+            STATE.board = [...savedSlot.board];
+            STATE.notes = savedSlot.notes || {};
+        }
     } else {
-        // If the date is different, reset the active board state
+        // RESET: No saved progress for this specific difficulty on this date.
         STATE.board = [];
         STATE.notes = {};
     }
@@ -132,11 +183,9 @@ function initDailyBoard(targetDate = new Date()) {
     STATE.dateStr = targetDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     document.getElementById('current-date-display').textContent = STATE.dateStr;
 
-    // 5. Load progress (This will only fill STATE.board if the dateSeed matches)
-    loadGame(); 
-
-    // 6. Generate the Solution for the NEW date
-const rng = seededRandom(STATE.dateSeed);
+    // 5. Generate the Solution for the NEW date
+    // We need the solution to exist so loadGame can "recover" it if needed
+    const rng = seededRandom(STATE.dateSeed);
     
     // 6. Generate a Unique Solution Grid
     const base = [1,2,3,4,5,6,7,8,9,
@@ -203,6 +252,8 @@ const rng = seededRandom(STATE.dateSeed);
             }
         }
     }
+    // 8. Load progress (This will only fill STATE.board if the dateSeed matches)
+    loadGame(); 
 
     if (STATE.board.length === 0) STATE.board = [...STATE.initial];
     renderGrid();
@@ -278,51 +329,40 @@ function updateNumpad() {
 // Logic to update stats upon winning
 
 function recordWin() {
-    const puzzleDate = STATE.dateSeed;
-    if (!STATS.history) STATS.history = {};
+    const dateKey = STATE.dateSeed;
+    const diff = SETTINGS.difficulty;
+    const comboKey = `${dateKey}_${diff}`;
 
-    const diffWeights = { 'easy': 1, 'medium': 2, 'hard': 3 };
+    // 1. Initialize history slot if missing
+    if (!STATS.history[dateKey]) STATS.history[dateKey] = {};
+    if (!STATS.history[dateKey][diff]) STATS.history[dateKey][diff] = {};
     
-    // CHANGE 1: Force currentDiff to be a string primitive
-    const currentDiff = String(SETTINGS.difficulty); 
-    const previousEntry = STATS.history[puzzleDate];
-    
-    // CHANGE 2: Robust weight check (handles if previousEntry was accidentally an object)
-    const previousWeight = (typeof previousEntry === 'string') ? (diffWeights[previousEntry] || 0) : 0;
-    const currentWeight = diffWeights[currentDiff] || 0;
+    // 2. Mark as completed in history
+    STATS.history[dateKey][diff].completed = true;
 
-    if (!previousEntry || currentWeight > previousWeight) {
-        STATS.history[puzzleDate] = currentDiff;
-    }
-    
-    // (Step 2: Totals)
-    if (!STATS.solvedCombos) STATS.solvedCombos = [];
-    const comboKey = `${puzzleDate}_${currentDiff}`;
-    
+    // 3. Track Unique Totals using solvedCombos
     if (!STATS.solvedCombos.includes(comboKey)) {
-        STATS.totalSolved[currentDiff]++;
+        STATS.totalSolved[diff]++;
         STATS.solvedCombos.push(comboKey);
     }
-    
-    // (Step 3: Streak Logic - Kept exactly as you had it)
-    const realToday = new Date();
-    const realTodaySeed = realToday.getFullYear() * 10000 + (realToday.getMonth() + 1) * 100 + realToday.getDate();
 
-    if (puzzleDate === realTodaySeed) {
-        if (STATS.lastSolvedDate) {
-            const yesterday = getYesterdaySeed(realTodaySeed);
+    // 4. Streak Logic (Once per day solve)
+    const realToday = new Date();
+    const todaySeed = realToday.getFullYear() * 10000 + (realToday.getMonth() + 1) * 100 + realToday.getDate();
+
+    if (dateKey === todaySeed) {
+        if (STATS.lastSolvedDate !== todaySeed) {
+            const yesterday = getYesterdaySeed(todaySeed);
             if (STATS.lastSolvedDate === yesterday) {
                 STATS.streak++;
-            } else if (STATS.lastSolvedDate !== realTodaySeed) {
+            } else {
                 STATS.streak = 1;
             }
-        } else {
-            STATS.streak = 1;
+            STATS.lastSolvedDate = todaySeed;
         }
-        STATS.lastSolvedDate = realTodaySeed;
     }
     
-    saveGame();
+    saveGame(); // This will now save the lean version (no board array)
     updateStatsUI();
 }
 
@@ -337,7 +377,6 @@ function renderCalendar() {
     
     monthLabel.textContent = STATE.viewingDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
-    // Boundary Logic for Buttons (Preserved)
     const prevBtn = document.getElementById('cal-prev');
     const nextBtn = document.getElementById('cal-next');
     
@@ -350,12 +389,10 @@ function renderCalendar() {
     const firstDay = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-    // Spacers for the start of the month
     for (let i = 0; i < firstDay; i++) {
         container.appendChild(document.createElement('div'));
     }
 
-    // Actual Today (Real world) for visual underlining
     const realToday = new Date();
     const realTodaySeed = realToday.getFullYear() * 10000 + (realToday.getMonth() + 1) * 100 + realToday.getDate();
 
@@ -367,7 +404,6 @@ function renderCalendar() {
         dayEl.className = 'calendar-day';
         dayEl.textContent = day;
 
-        // 1. Boundary Checks (Genesis and Future)
         const isFuture = dateObj > TODAY;
         const isBeforeGenesis = dateObj < GENESIS_DATE;
 
@@ -376,26 +412,30 @@ function renderCalendar() {
             dayEl.style.opacity = "0.15";
             dayEl.style.cursor = "default";
         } else {
-            // 2. Visual State: Completion (Reflecting history of older days)
-            if (STATS.history && STATS.history[dateSeed]) {
-                dayEl.classList.add('completed');
-                // Optional: add difficulty class to color code rings (diff-easy, diff-hard)
-                dayEl.classList.add(`diff-${STATS.history[dateSeed]}`);
+            // 1. Check history for THIS date
+            const dayData = STATS.history ? STATS.history[dateSeed] : null;
+            
+            if (dayData) {
+                // Count how many difficulty levels are marked 'completed'
+                const levelsDone = Object.values(dayData).filter(slot => slot.completed).length;
+
+                if (levelsDone > 0) {
+                    dayEl.classList.add('completed');
+                    // This allows CSS to show the 'X' or style based on completion count
+                    dayEl.setAttribute('data-done-count', levelsDone);
+                }
             }
 
-            // 3. Visual State: Active Day (What board is currently loaded)
+            // 2. Visual State: Active Day (The day currently being played)
             if (dateSeed === STATE.dateSeed) {
                 dayEl.classList.add('active');
             }
 
-            // 4. Visual State: Real-world Today
+            // 3. Visual State: Real-world Today (The actual calendar date)
             if (dateSeed === realTodaySeed) {
                 dayEl.classList.add('is-today');
             }
-            if (STATS.history && STATS.history[dateSeed]) dayEl.classList.add('completed');
-            if (dateSeed === STATE.dateSeed) dayEl.classList.add('active');
 
-            // 5. Interaction: Time Travel
             dayEl.onclick = () => {
                 initDailyBoard(dateObj);
                 document.getElementById('stats-overlay').classList.add('hidden');

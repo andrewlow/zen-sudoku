@@ -232,13 +232,18 @@ body {
     font-weight: 600;
 }
 
-/* Small dot for completed days if you prefer that over a ring */
 .calendar-day.completed::after {
-    content: '';
+    content: '✕'; /* A clean X */
     position: absolute;
-    bottom: 4px;
-    width: 4px;
-    height: 4px;
-    background: var(--primary);
-    border-radius: 50%;
+    bottom: 2px;
+    font-size: 0.6rem;
+    color: var(--primary);
+    font-weight: 900;
 }
+
+/* Optional: Subtle indicator if they did all 3 */
+.calendar-day.completed[data-done-count="3"] {
+    background-color: rgba(var(--primary-rgb), 0.1);
+    font-weight: bold;
+}
+
